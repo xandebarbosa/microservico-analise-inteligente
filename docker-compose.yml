@@ -1,0 +1,37 @@
+networks:
+  radares-net:
+    external: true
+
+services:
+
+  # ═══════════════════════════════════════════════
+  #  MICROSSERVIÇO — Análise Inteligente (Quarkus)
+  # ═══════════════════════════════════════════════
+  quarkus-analise-inteligente:
+    container_name: quarkus-analise-inteligente
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8090:8090"
+    environment:
+      - QUARKUS_PROFILE=prod
+
+      # Força o Quarkus a escutar em todas as interfaces da rede Docker
+      - QUARKUS_HTTP_HOST=0.0.0.0
+
+      # Aponta para o Eureka Server de dentro da rede Docker
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-server:8761/eureka/
+
+      # Aponta o RestClient (que vai buscar os dados) para o BFF interno
+      - QUARKUS_REST_CLIENT_BFF_API_URL=http://microservico-radares-bff:8081
+
+    networks:
+      - radares-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8090/q/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

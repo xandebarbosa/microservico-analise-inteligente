@@ -1,5 +1,6 @@
 package com.coruja.resource;
 
+import com.coruja.dto.ComboioAvancadoRequestDTO;
 import com.coruja.dto.VeiculoSuspeitoDTO;
 import com.coruja.service.AnaliseComboioService;
 import jakarta.inject.Inject;
@@ -48,6 +49,21 @@ public class AnaliseResource {
 
         List<VeiculoSuspeitoDTO> resultado = analiseComboioService.analisarComboio(placaAlvo, data, tempoMinutos);
 
-        return  Response.ok(resultado).build();
+        return Response.ok(resultado).build();
+    }
+
+    @POST
+    @Path("/comboio/passagens")
+    @Operation(summary = "Detecta comboio com base em passagens específicas selecionadas manualmente")
+    public Response detectarComboioAvancado(ComboioAvancadoRequestDTO request) {
+        if (request == null || request.getPlacaAlvo() == null || request.getPassagens() == null) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity("Dados incompletos para análise avançada.")
+                    .build();
+        }
+
+        List<VeiculoSuspeitoDTO> resultado = analiseComboioService.analisarComboioAvancado(request);
+
+        return Response.ok(resultado).build();
     }
 }

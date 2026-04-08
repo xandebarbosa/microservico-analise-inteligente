@@ -1,10 +1,7 @@
 package com.coruja.service;
 
 import com.coruja.client.BffRestClient;
-import com.coruja.dto.EncontroDTO;
-import com.coruja.dto.RadarDTO;
-import com.coruja.dto.RadarPageDTO;
-import com.coruja.dto.VeiculoSuspeitoDTO;
+import com.coruja.dto.*;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -20,6 +17,9 @@ public class AnaliseComboioService {
     @RestClient
     BffRestClient bffClient;
 
+    /**
+     * MÉTODO 1: ANÁLISE DE COMBOIO TRADICIONAL (Automática por data)
+     */
     public List<VeiculoSuspeitoDTO> analisarComboio(String placaAlvo, LocalDate data, int tempoMinutos) {
         // 1. Busca os passos do alvo
         RadarPageDTO passagensAlvo = bffClient.buscarPassagensAlvo(placaAlvo, 1000);
@@ -43,7 +43,7 @@ public class AnaliseComboioService {
             LocalTime horaFim =  alvo.getHora().plusMinutes(tempoMinutos);
 
             RadarPageDTO passagensNoLocal = bffClient.buscarPassagensPorLocalETempo(
-                    data, alvo.getRodovia(), alvo.getPraca(), alvo.getKm(), alvo.getSentido(), horaInicio, horaFim, 5000
+                    data, alvo.getRodovia(), alvo.getPraca() ,alvo.getKm(), alvo.getSentido(), horaInicio, horaFim, 5000
             );
 
             if (passagensNoLocal == null || passagensNoLocal.getContent() == null) continue;
@@ -60,6 +60,7 @@ public class AnaliseComboioService {
                 encontroDTO.setPraca(suspeito.getPraca());
                 encontroDTO.setKm(suspeito.getKm());
                 encontroDTO.setSentido(suspeito.getSentido());
+                encontroDTO.setData(suspeito.getData());
                 encontroDTO.setHoraAlvo(alvo.getHora().toString());
                 encontroDTO.setHoraSuspeito(suspeito.getHora().toString());
                 encontroDTO.setDiferencaSegundos(diferencaSeg);
@@ -81,5 +82,71 @@ public class AnaliseComboioService {
                 .sorted(Comparator.comparingInt(VeiculoSuspeitoDTO::getQuantidadeEncontros).reversed())
                 .collect(Collectors.toList());
 
+    }
+
+    /**
+     * MÉTODO 2: ANÁLISE DE COMBOIO SELETIVA (Avançada, baseada nas passagens selecionadas na tela)
+     */
+    public List<VeiculoSuspeitoDTO> analisarComboioAvancado(ComboioAvancadoRequestDTO request) {
+        if (request.getPassagens() == null || request.getPassagens().isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        Map<String, VeiculoSuspeitoDTO> suspeitoDTOMap = new HashMap<>();
+
+        // Itera EXATAMENTE sobre as passagens que o usuário selecionou na tela
+        for (RadarDTO alvo : request.getPassagens()) {
+            LocalTime horaInicio = alvo.getHora().minusMinutes(request.getTempoMinutos());
+            LocalTime horaFim = alvo.getHora().plusMinutes(request.getTempoMinutos());
+
+            RadarPageDTO passagensNoLocal = null;
+
+            try {
+                // Tenta buscar as passagens neste local
+                passagensNoLocal = bffClient.buscarPassagensPorLocalETempo(
+                        alvo.getData(), alvo.getRodovia(), alvo.getPraca(), alvo.getKm(), alvo.getSentido(), horaInicio, horaFim, 5000
+                );
+            } catch (Exception e) {
+                // 🔹 O SEGREDO ESTÁ AQUI!
+                // Se o BFF der Timeout ou Erro 500 nesta praça específica, a IA não quebra mais.
+                // Ela apenas avisa no console, ignora esse ponto e continua cruzando os dados das outras praças.
+                System.err.println("⚠️ Falha ou Timeout no BFF ao buscar o local " + alvo.getRodovia() + ". Ignorando e continuando...");
+                continue;
+            }
+
+            if (passagensNoLocal == null || passagensNoLocal.getContent() == null) continue;
+
+            for (RadarDTO suspeito : passagensNoLocal.getContent()) {
+                if (suspeito.getPlaca().equalsIgnoreCase(request.getPlacaAlvo())) continue;
+
+                long diferencaSeg = Math.abs(ChronoUnit.SECONDS.between(alvo.getHora(), suspeito.getHora()));
+
+                EncontroDTO encontroDTO = new EncontroDTO();
+                encontroDTO.setConcessionaria(suspeito.getConcessionaria());
+                encontroDTO.setRodovia(suspeito.getRodovia());
+                encontroDTO.setPraca(suspeito.getPraca());
+                encontroDTO.setKm(suspeito.getKm());
+                encontroDTO.setSentido(suspeito.getSentido());
+                encontroDTO.setData(alvo.getData()); // Necessário para o Excel
+                encontroDTO.setHoraAlvo(alvo.getHora().toString());
+                encontroDTO.setHoraSuspeito(suspeito.getHora().toString());
+                encontroDTO.setDiferencaSegundos(diferencaSeg);
+
+                VeiculoSuspeitoDTO suspeitoDTO = suspeitoDTOMap.computeIfAbsent(
+                        suspeito.getPlaca(), k -> {
+                            VeiculoSuspeitoDTO dto = new VeiculoSuspeitoDTO();
+                            dto.setPlaca(suspeito.getPlaca());
+                            return dto;
+                        }
+                );
+                suspeitoDTO.adicionarEncontro(encontroDTO);
+            }
+        }
+
+        // Para busca seletiva, consideramos suspeito qualquer um que tenha sido visto nos pontos selecionados (> 0)
+        return suspeitoDTOMap.values().stream()
+                .filter(s -> s.getQuantidadeEncontros() > 1)
+                .sorted(Comparator.comparingInt(VeiculoSuspeitoDTO::getQuantidadeEncontros).reversed())
+                .collect(Collectors.toList());
     }
 }

@@ -35,8 +35,9 @@ public class EurekaRegistrationService {
     String eurekaUrl;
 
     private String instanceId;
+    private String registroPayload;
     private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
+            .connectTimeout(Duration.ofSeconds(3))
             .build();
     private ScheduledExecutorService scheduler;
 
@@ -75,6 +76,8 @@ public class EurekaRegistrationService {
             }
             """.formatted(instanceId, ipAddress, appNameUpper, ipAddress, port, appNameUpper);
 
+        this.registroPayload = payload;
+
         registrarNoEureka(payload, appNameUpper);
         iniciarHeartbeat(appNameUpper);
     }
@@ -84,6 +87,7 @@ public class EurekaRegistrationService {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(eurekaUrl + "apps/" + appNameUpper))
                     .header("Content-Type", "application/json")
+                    .timeout(Duration.ofSeconds(5))
                     .POST(HttpRequest.BodyPublishers.ofString(payload))
                     .build();
 
@@ -105,12 +109,19 @@ public class EurekaRegistrationService {
             try {
                 HttpRequest request = HttpRequest.newBuilder()
                         .uri(URI.create(eurekaUrl + "apps/" + appNameUpper + "/" + instanceId))
+                        .timeout(Duration.ofSeconds(3))
                         .PUT(HttpRequest.BodyPublishers.noBody())
                         .build();
 
                 HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-                if (response.statusCode() != 200) {
-                    LOG.warn("⚠️ Eureka não reconheceu o heartbeat (Status {}). Ele pode ter reiniciado.", response.statusCode());
+
+                if (response.statusCode() == 404) {
+                    // SE O EUREKA NÃO NOS CONHECE MAIS, FORÇAMOS UM NOVO REGISTRO
+                    LOG.warn("⚠️ Eureka não reconheceu o heartbeat (Status 404). Forçando novo registro...");
+                    registrarNoEureka(this.registroPayload, appNameUpper);
+                } else if (response.statusCode() != 200) {
+                    // TRATA OUTROS ERROS POSSÍVEIS (500, etc)
+                    LOG.warn("⚠️ Falha ao enviar heartbeat para o Eureka (Status {}).", response.statusCode());
                 }
             } catch (Exception e) {
                 LOG.debug("Falha ao enviar heartbeat para o Eureka: {}", e.getMessage());
@@ -126,6 +137,7 @@ public class EurekaRegistrationService {
             String appNameUpper = appName.toUpperCase();
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(eurekaUrl + "apps/" + appNameUpper + "/" + instanceId))
+                    .timeout(Duration.ofSeconds(2))
                     .DELETE()
                     .build();
             httpClient.send(request, HttpResponse.BodyHandlers.discarding());

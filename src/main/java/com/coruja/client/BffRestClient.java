@@ -5,13 +5,14 @@ import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.QueryParam;
 import org.eclipse.microprofile.rest.client.annotation.RegisterClientHeaders;
+import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
 
 @RegisterRestClient(configKey = "bff-api")
-@RegisterClientHeaders
+@RegisterProvider(TokenPropagationFilter.class) // <-- Liga o nosso novo filtro automático
 public interface BffRestClient {
 
     @GET

@@ -4,6 +4,8 @@ import com.coruja.client.BffRestClient;
 import com.coruja.dto.*;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -14,6 +16,7 @@ import java.util.stream.Collectors;
 @ApplicationScoped
 public class AnaliseComboioService {
 
+    private static final Logger log = LoggerFactory.getLogger(AnaliseComboioService.class);
     @RestClient
     BffRestClient bffClient;
 
@@ -132,10 +135,13 @@ public class AnaliseComboioService {
                 encontroDTO.setHoraSuspeito(suspeito.getHora().toString());
                 encontroDTO.setDiferencaSegundos(diferencaSeg);
 
+                // Limpamos os espaços em branco e forçamos MAIÚSCULO para garantir que o Java cruze os dados corretamente
+                String placaTratada = suspeito.getPlaca() != null ? suspeito.getPlaca().trim().toUpperCase() : "DESCONHECIDO";
+
                 VeiculoSuspeitoDTO suspeitoDTO = suspeitoDTOMap.computeIfAbsent(
-                        suspeito.getPlaca(), k -> {
+                        placaTratada, k -> {
                             VeiculoSuspeitoDTO dto = new VeiculoSuspeitoDTO();
-                            dto.setPlaca(suspeito.getPlaca());
+                            dto.setPlaca(placaTratada);
                             return dto;
                         }
                 );

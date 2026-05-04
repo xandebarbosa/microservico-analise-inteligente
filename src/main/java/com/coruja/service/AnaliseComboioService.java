@@ -24,36 +24,66 @@ public class AnaliseComboioService {
      * MÉTODO 1: ANÁLISE DE COMBOIO TRADICIONAL (Automática por data)
      */
     public List<VeiculoSuspeitoDTO> analisarComboio(String placaAlvo, LocalDate data, int tempoMinutos) {
+
+        log.info("Iniciando a análise de comboio para a placa {} na data {}", placaAlvo, data);
+
         // 1. Busca os passos do alvo
         RadarPageDTO passagensAlvo = bffClient.buscarPassagensAlvo(placaAlvo, 1000);
 
-        if (passagensAlvo == null || passagensAlvo.getContent() == null) {
+        if (passagensAlvo == null || passagensAlvo.getContent() == null || passagensAlvo.getContent().isEmpty()) {
+            log.warn("Nenhuma passagem encontrada para a placa alvo: {}", placaAlvo);
             return Collections.emptyList();
         }
 
+        //Filtra apenas as passagens do dia especificado
         List<RadarDTO> passagensDoDia = passagensAlvo.getContent()
                 .stream()
                 .filter(p -> p.getData().equals(data))
                 .collect(Collectors.toList());
+
+        if (passagensDoDia.isEmpty()) {
+            log.warn("Nenhuma passagem encontrada para a placa {} na data {}", placaAlvo, data);
+            return Collections.emptyList();
+        }
+
+        log.info("Placa alvo {} encontrada em {} locais na data {}", placaAlvo, passagensDoDia.size(), data);
 
         Map<String, VeiculoSuspeitoDTO> suspeitoDTOMap = new HashMap<>();
 
         // 2. Para cada local que o alvo passou, procuramos companhias
         for (RadarDTO alvo : passagensDoDia) {
 
+            log.debug("Analisando local: {} KM {} às {}", alvo.getRodovia(), alvo.getKm(), alvo.getHora());
+
             // Janela de tempo configuravel (ex: alvo passou 10:00. Busca de 09:59:40 até 10:00:20)
             LocalTime horaInicio = alvo.getHora().minusMinutes(tempoMinutos);
             LocalTime horaFim =  alvo.getHora().plusMinutes(tempoMinutos);
 
-            RadarPageDTO passagensNoLocal = bffClient.buscarPassagensPorLocalETempo(
-                    data, alvo.getRodovia(), alvo.getPraca() ,alvo.getKm(), alvo.getSentido(), horaInicio, horaFim, 5000
-            );
+            RadarPageDTO passagensNoLocal = null;
 
-            if (passagensNoLocal == null || passagensNoLocal.getContent() == null) continue;
+            try {
+                passagensNoLocal = bffClient.buscarPassagensPorLocalETempo(
+                        data, alvo.getRodovia(), alvo.getPraca() ,alvo.getKm(), alvo.getSentido(), horaInicio, horaFim, 5000
+                );
+            } catch (Exception e) {
+                log.warn("Erro ao buscar passagens no local {} - continuando", alvo.getRodovia(), e);
+                continue;
+            }
+
+            if (passagensNoLocal == null || passagensNoLocal.getContent() == null) {
+                log.debug("Nenhuma passagem encontrada neste local");
+                continue;
+            };
+
+            log.debug("Encontradas {} passagens no local", passagensNoLocal.getContent().size());
 
             // 3. Processa e agrupa os suspeitos
             for (RadarDTO suspeito : passagensNoLocal.getContent()) {
-                if (suspeito.getPlaca().equalsIgnoreCase(placaAlvo)) continue;
+
+                //Ignora a própria placa alvo
+                if (suspeito.getPlaca() != null && suspeito.getPlaca().trim().toUpperCase().equals(placaAlvo.trim().toUpperCase())) {
+                    continue;
+                }
 
                 long diferencaSeg = Math.abs(ChronoUnit.SECONDS.between(alvo.getHora(), suspeito.getHora()));
 
@@ -68,10 +98,14 @@ public class AnaliseComboioService {
                 encontroDTO.setHoraSuspeito(suspeito.getHora().toString());
                 encontroDTO.setDiferencaSegundos(diferencaSeg);
 
+                // Trata a placa: remove espaços e força MAIÚSCULA
+                String placaTratada = suspeito.getPlaca() != null ?
+                        suspeito.getPlaca().trim().toUpperCase() : "DESCONHECIDO";
+
                 VeiculoSuspeitoDTO suspeitoDTO = suspeitoDTOMap.computeIfAbsent(
-                        suspeito.getPlaca(), k -> {
+                        placaTratada, k -> {
                             VeiculoSuspeitoDTO dto = new VeiculoSuspeitoDTO();
-                            dto.setPlaca(suspeito.getPlaca());
+                            dto.setPlaca(placaTratada);
                             return dto;
                         }
                 );
@@ -80,18 +114,23 @@ public class AnaliseComboioService {
         }
 
         // 4. Retorna ordenado (quem andou junto mais vezes, aparece no topo)
-        return suspeitoDTOMap.values().stream()
-                .filter(s -> s.getQuantidadeEncontros() > 1) // Filtro: Tem que ter encontrado mais de 1 vez para ser suspeito
-                .sorted(Comparator.comparingInt(VeiculoSuspeitoDTO::getQuantidadeEncontros).reversed())
+        List<VeiculoSuspeitoDTO> resultado =  suspeitoDTOMap.values().stream()
+                .filter(s -> s.getQuantidadeEncontros() >= 2) // Filtro: Tem que ter encontrado mais de 1 vez para ser suspeito
+                .sorted(Comparator.comparingInt(VeiculoSuspeitoDTO::getQuantidadeEncontros).reversed().thenComparing(VeiculoSuspeitoDTO::getPlaca))
                 .collect(Collectors.toList());
 
+        log.info("Análise concluída: {} placas diferentes encontradas", resultado.size());
+        return resultado;
     }
 
     /**
      * MÉTODO 2: ANÁLISE DE COMBOIO SELETIVA (Avançada, baseada nas passagens selecionadas na tela)
      */
     public List<VeiculoSuspeitoDTO> analisarComboioAvancado(ComboioAvancadoRequestDTO request) {
+        log.info("Iniciando análise avançada para a placa {} com {} passagens selecionadas", request.getPlacaAlvo(), request.getPassagens().size());
+
         if (request.getPassagens() == null || request.getPassagens().isEmpty()) {
+            log.warn("Nenhuma passagem fornecida para análise avançada");
             return Collections.emptyList();
         }
 
@@ -99,6 +138,8 @@ public class AnaliseComboioService {
 
         // Itera EXATAMENTE sobre as passagens que o usuário selecionou na tela
         for (RadarDTO alvo : request.getPassagens()) {
+            log.debug("Processando passagem selecionada: {} às {}", alvo.getRodovia(), alvo.getHora());
+
             LocalTime horaInicio = alvo.getHora().minusMinutes(request.getTempoMinutos());
             LocalTime horaFim = alvo.getHora().plusMinutes(request.getTempoMinutos());
 
@@ -113,14 +154,19 @@ public class AnaliseComboioService {
                 // 🔹 O SEGREDO ESTÁ AQUI!
                 // Se o BFF der Timeout ou Erro 500 nesta praça específica, a IA não quebra mais.
                 // Ela apenas avisa no console, ignora esse ponto e continua cruzando os dados das outras praças.
-                System.err.println("⚠️ Falha ou Timeout no BFF ao buscar o local " + alvo.getRodovia() + ". Ignorando e continuando...");
+                log.warn("⚠️ Falha ou Timeout no BFF ao buscar o local {} ({}). Ignorando e continuando...", alvo.getRodovia(), alvo.getPraca(), e);
                 continue;
             }
 
-            if (passagensNoLocal == null || passagensNoLocal.getContent() == null) continue;
+            if (passagensNoLocal == null || passagensNoLocal.getContent() == null) {
+                log.debug("Nenhuma passagem neste local específico");
+                continue;
+            };
+
+            log.debug("Encontradas {} passagens nesta localidade", passagensNoLocal.getContent().size());
 
             for (RadarDTO suspeito : passagensNoLocal.getContent()) {
-                if (suspeito.getPlaca().equalsIgnoreCase(request.getPlacaAlvo())) continue;
+                if (suspeito.getPlaca() == null || suspeito.getPlaca().trim().equalsIgnoreCase(request.getPlacaAlvo().trim())) continue;
 
                 long diferencaSeg = Math.abs(ChronoUnit.SECONDS.between(alvo.getHora(), suspeito.getHora()));
 
@@ -136,7 +182,7 @@ public class AnaliseComboioService {
                 encontroDTO.setDiferencaSegundos(diferencaSeg);
 
                 // Limpamos os espaços em branco e forçamos MAIÚSCULO para garantir que o Java cruze os dados corretamente
-                String placaTratada = suspeito.getPlaca() != null ? suspeito.getPlaca().trim().toUpperCase() : "DESCONHECIDO";
+                String placaTratada = suspeito.getPlaca().trim().toUpperCase();
 
                 VeiculoSuspeitoDTO suspeitoDTO = suspeitoDTOMap.computeIfAbsent(
                         placaTratada, k -> {
@@ -150,9 +196,13 @@ public class AnaliseComboioService {
         }
 
         // Para busca seletiva, consideramos suspeito qualquer um que tenha sido visto nos pontos selecionados (> 0)
-        return suspeitoDTOMap.values().stream()
-                .filter(s -> s.getQuantidadeEncontros() > 1)
-                .sorted(Comparator.comparingInt(VeiculoSuspeitoDTO::getQuantidadeEncontros).reversed())
+        //Retorna todas as placas encontradas
+        List<VeiculoSuspeitoDTO> resultado = suspeitoDTOMap.values().stream()
+                .filter(s -> s.getQuantidadeEncontros() >= 2)
+                .sorted(Comparator.comparingInt(VeiculoSuspeitoDTO::getQuantidadeEncontros).reversed().thenComparing(VeiculoSuspeitoDTO::getPlaca))
                 .collect(Collectors.toList());
+
+        log.info("Análise avançada concluída: {} placas diferentes encontradas", resultado.size());
+        return resultado;
     }
 }

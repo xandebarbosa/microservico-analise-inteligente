@@ -8,6 +8,8 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.eclipse.microprofile.openapi.annotations.Operation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -21,6 +23,8 @@ public class AnaliseResource {
     @Inject
     AnaliseComboioService analiseComboioService;
 
+    private static final Logger log = LoggerFactory.getLogger(AnaliseComboioService.class);
+
     @GET
     @Path("/comboio")
     @Operation(summary = "Detecta veículos que viajaram em comboio com uma placa alvo")
@@ -31,6 +35,7 @@ public class AnaliseResource {
     ) {
         LocalDate data;
 
+        log.info("Requisição recebida: placaAlvo={}, data={}, tempoMinutos={}", placaAlvo, dataStr, tempoMinutos);
         try {
             // Verifica se a data começa com o dia (ex: 05/03/2026 ou 05-03-2026)
             if (dataStr.matches("^\\d{2}[/-]\\d{2}[/-]\\d{4}$")) {
@@ -56,6 +61,7 @@ public class AnaliseResource {
     @Path("/comboio/passagens")
     @Operation(summary = "Detecta comboio com base em passagens específicas selecionadas manualmente")
     public Response detectarComboioAvancado(ComboioAvancadoRequestDTO request) {
+        log.info("Requisição recebida: {}", request);
         if (request == null || request.getPlacaAlvo() == null || request.getPassagens() == null) {
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity("Dados incompletos para análise avançada.")
